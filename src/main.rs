@@ -25,10 +25,9 @@ fn main() {
 
     io::stdin().read_line(&mut input_line).unwrap();
 
-    // TODO: Uncomment the code below to pass the first stage
-    // if match_pattern(&input_line, &pattern) {
-    //     process::exit(0)
-    // } else {
-    //     process::exit(1)
-    // }
+    if match_pattern(&input_line, &pattern) {
+        process::exit(0)
+    } else {
+        process::exit(1)
+    }
 }
