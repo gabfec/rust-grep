@@ -10,7 +10,14 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
     } else if pattern.eq("\\w") {
         return input_line.chars().filter(|x| x.is_alphanumeric() || *x == '_').count() > 0;
     } else if pattern.starts_with('[') && pattern.ends_with(']') {
-        return pattern.chars().skip(1).take(pattern.len() - 2).any(|x| input_line.contains(x));
+        if pattern.chars().nth(1) == Some('^') {
+            // Negative match
+            let match_chars = &pattern[2..pattern.len() - 1];
+            return match_chars.chars().any(|c| !input_line.contains(c));
+        } else {
+            let match_chars = &pattern[1..pattern.len() - 1];
+            return match_chars.chars().any(|c| input_line.contains(c));
+        }
     }
     else {
         panic!("Unhandled pattern: {}", pattern)
