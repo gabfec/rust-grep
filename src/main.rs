@@ -90,6 +90,12 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
         return true;
     }
 
+    if pattern.starts_with('^') {
+        // We slice from 1 to remove the '^'
+        let tokens = parse_pattern(&pattern[1..]);
+        return match_here(&tokens, input_line);
+    }
+
     // .char_indices() gives us (byte_index, character)
     // We only care about the byte_index to slice correctly
     for (i, _) in input_line.char_indices() {
