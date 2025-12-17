@@ -15,6 +15,7 @@ enum Token {
     Digit,
     Alphanumeric,
     BracketGroup(Vec<char>, GroupType),
+    EndAnchor,
 }
 
 fn parse_pattern(pattern: &str) -> Vec<Token> {
@@ -29,6 +30,7 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 Some(escaped) => tokens.push(Token::Literal(escaped)),
                 None => {}
             },
+            '$' => tokens.push(Token::EndAnchor),
             '[' => {
                 let mut group_type = GroupType::Positive;
                 if chars.peek() == Some(&'^') {
@@ -59,7 +61,8 @@ fn matches_token(token: &Token, c: char) -> bool {
                 GroupType::Positive => found,
                 GroupType::Negative => !found,
             }
-        }
+        },
+        _ => false, // This covers EndAnchor and any other future positional tokens
     }
 }
 
@@ -67,6 +70,11 @@ fn matches_token(token: &Token, c: char) -> bool {
 fn match_here(tokens: &[Token], text: &str) -> bool {
     if tokens.is_empty() {
         return true; // Pattern exhausted, we matched!
+    }
+
+    // If the next token is an EndAnchor, check if we've reached the end of the text
+    if let Token::EndAnchor = tokens[0] {
+        return text.is_empty();
     }
 
     let mut text_chars = text.chars();
