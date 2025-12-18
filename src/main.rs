@@ -15,8 +15,9 @@ enum Token {
     Digit,
     Alphanumeric,
     BracketGroup(Vec<char>, GroupType),
-    EndAnchor,
-    OneOrMore(Box<Token>),
+    EndAnchor,             // $
+    OneOrMore(Box<Token>), // +
+    ZeroOrOne(Box<Token>), // ?
 }
 
 fn parse_pattern(pattern: &str) -> Vec<Token> {
@@ -49,7 +50,12 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 if let Some(prev) = tokens.pop() {
                     tokens.push(Token::OneOrMore(Box::new(prev)));
                 }
-            }
+            },
+            '?' => {
+                if let Some(prev) = tokens.pop() {
+                    tokens.push(Token::ZeroOrOne(Box::new(prev)));
+                }
+            },
             _ => tokens.push(Token::Literal(c)),
         }
     }
@@ -80,6 +86,23 @@ fn match_here(tokens: &[Token], text: &str) -> bool {
 
     match &tokens[0] {
         Token::EndAnchor => return text.is_empty(),
+        Token::ZeroOrOne(inner) => {
+            // Path A: The "Zero" case (Skip this token entirely)
+            // We check if the rest of the tokens match the current text.
+            if match_here(&tokens[1..], text) {
+                return true;
+            }
+
+            // Path B: The "One" case (Try to match the token once)
+            let mut text_chars = text.chars();
+            match text_chars.next() {
+                Some(c) if matches_token(inner, c) => {
+                    // If it matches, we move to the next token and the rest of the text
+                    match_here(&tokens[1..], text_chars.as_str())
+                }
+                _ => false,
+            }
+        }
         Token::OneOrMore(inner) => {
             let mut text_chars = text.chars();
             match text_chars.next() {
