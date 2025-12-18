@@ -1,5 +1,6 @@
 use std::env;
 use std::io;
+use std::io::BufRead;
 use std::process;
 
 
@@ -205,23 +206,28 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
 fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    eprintln!("Logs from your program will appear here!");
-
     if env::args().nth(1).unwrap() != "-E" {
         println!("Expected first argument to be '-E'");
         process::exit(1);
     }
 
     let pattern = env::args().nth(2).unwrap();
-    let mut input_line = String::new();
+    let mut matched_any = false;
 
-    io::stdin().read_line(&mut input_line).unwrap();
+    // Use BufReader to iterate over stdin line by line
+    for line_result in io::stdin().lock().lines() {
+        let line = line_result.unwrap();
 
-    if match_pattern(&input_line, &pattern) {
-        println!("{}", input_line);
-        process::exit(0)
+        if match_pattern(&line, &pattern) {
+            println!("{}", line);
+            matched_any = true;
+        }
+    }
+
+    // Exit with 0 if at least one line matched, otherwise 1
+    if matched_any {
+        process::exit(0);
     } else {
-        process::exit(1)
+        process::exit(1);
     }
 }
