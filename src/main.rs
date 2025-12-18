@@ -14,6 +14,7 @@ enum Token {
     Literal(char),
     Digit,
     Alphanumeric,
+    Wildcard,
     BracketGroup(Vec<char>, GroupType),
     EndAnchor,             // $
     OneOrMore(Box<Token>), // +
@@ -56,6 +57,7 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                     tokens.push(Token::ZeroOrOne(Box::new(prev)));
                 }
             },
+            '.' => tokens.push(Token::Wildcard),
             _ => tokens.push(Token::Literal(c)),
         }
     }
@@ -64,6 +66,7 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
 
 fn matches_token(token: &Token, c: char) -> bool {
     match token {
+        Token::Wildcard => true,
         Token::Literal(l) => c == *l,
         Token::Digit => c.is_ascii_digit(),
         Token::Alphanumeric => c.is_ascii_alphanumeric() || c == '_',
