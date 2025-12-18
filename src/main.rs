@@ -108,13 +108,13 @@ fn matches_token(token: &Token, c: char) -> bool {
 }
 
 // Checks if the pattern matches starting exactly at the beginning of 'text'
-fn match_here(tokens: &[Token], text: &str) -> bool {
+fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
     if tokens.is_empty() {
-        return true; // Pattern exhausted, we matched!
+        return Some(0); // Pattern exhausted, we matched!
     }
 
     match &tokens[0] {
-        Token::EndAnchor => return text.is_empty(),
+        Token::EndAnchor => { if text.is_empty() { Some(0) } else { None } }
         Token::Alternation(left, right) => {
             // The "Future" is whatever comes after the alternation group
             let rest_of_tokens = &tokens[1..];
@@ -122,24 +122,23 @@ fn match_here(tokens: &[Token], text: &str) -> bool {
             // Scenario 1: Try the Left branch + Future
             let mut left_path = left.clone();
             left_path.extend_from_slice(rest_of_tokens);
-            if match_here(&left_path, text) {
-                return true;
+            if let Some(len) = match_here(&left_path, text) {
+                return Some(len);
             }
 
             // Scenario 2: Try the Right branch + Future
             let mut right_path = right.clone();
             right_path.extend_from_slice(rest_of_tokens);
-            if match_here(&right_path, text) {
-                return true;
+            if let Some(len) = match_here(&right_path, text) {
+                return Some(len);
             }
 
-            false
+            None
         }
         Token::ZeroOrOne(inner) => {
             // Path A: The "Zero" case (Skip this token entirely)
-            // We check if the rest of the tokens match the current text.
-            if match_here(&tokens[1..], text) {
-                return true;
+            if let Some(len) = match_here(&tokens[1..], text) {
+                return Some(len);
             }
 
             // Path B: The "One" case (Try to match the token once)
@@ -147,80 +146,99 @@ fn match_here(tokens: &[Token], text: &str) -> bool {
             match text_chars.next() {
                 Some(c) if matches_token(inner, c) => {
                     // If it matches, we move to the next token and the rest of the text
-                    match_here(&tokens[1..], text_chars.as_str())
+                    if let Some(len) = match_here(&tokens[1..], text_chars.as_str()) {
+                        return Some(1 + len);
+                    }
+                    None
                 }
-                _ => false,
+                _ => None,
             }
         }
         Token::OneOrMore(inner) => {
             let mut text_chars = text.chars();
             match text_chars.next() {
-                Some(c) => {
-                    if matches_token(inner, c) {
-                        // Path A: Match more of the same (stay on OneOrMore)
-                        // Path B: Move to the next token
-                        return match_here(tokens, text_chars.as_str()) || match_here(&tokens[1..], text_chars.as_str());
+                Some(c) if matches_token(inner, c) => {
+                    // Path A: Match more of the same (stay on OneOrMore)
+                    if let Some(len) = match_here(tokens, text_chars.as_str()) {
+                        return Some(1 + len);
                     }
-                    false
+                    // Path B: Move to the next token
+                    if let Some(len) = match_here(&tokens[1..], text_chars.as_str()) {
+                        return Some(1 + len);
+                    }
+                    None
                 }
-                None => false, // Text ended before pattern
+                _ => None,
             }
         }
         // Handle normal single-character tokens
         _ => {
-            let mut chars = text.chars();
-            match chars.next() {
+            let mut text_chars = text.chars();
+            match text_chars.next() {
                 Some(c) if matches_token(&tokens[0], c) => {
-                    match_here(&tokens[1..], chars.as_str())
+                    // If the rest of the pattern matches, add 1 (for current char) to that length
+                    if let Some(len) = match_here(&tokens[1..], text_chars.as_str()) {
+                        return Some(1 + len);
+                    }
+                    None
                 }
-                _ => false,
+                _ => None,
             }
         }
     }
 }
 
-fn match_pattern(input_line: &str, pattern: &str) -> bool {
+fn match_pattern<'a>(input_line: &'a str, pattern: &str) -> Option<&'a str> {
     let tokens = parse_pattern(pattern);
 
-    // Check empty string case (important for some tests)
+    // Check empty string case
     if input_line.is_empty() && tokens.is_empty() {
-        return true;
+        return Some("");
     }
 
     if pattern.starts_with('^') {
         // We slice from 1 to remove the '^'
         let tokens = parse_pattern(&pattern[1..]);
-        return match_here(&tokens, input_line);
+        // If match_here gives us a length, return that slice of the input
+        return match_here(&tokens, input_line).map(|len| &input_line[..len]);
     }
 
     // .char_indices() gives us (byte_index, character)
     // We only care about the byte_index to slice correctly
     for (i, _) in input_line.char_indices() {
-        if match_here(&tokens, &input_line[i..]) {
-            return true;
+        // If match_here gives us a length, return the slice starting at i
+        if let Some(len) = match_here(&tokens, &input_line[i..]) {
+            return Some(&input_line[i..i + len]);
         }
     }
 
-    false
+    None
 }
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
 fn main() {
-    if env::args().nth(1).unwrap() != "-E" {
-        println!("Expected first argument to be '-E'");
-        process::exit(1);
-    }
+    let args: Vec<String> = env::args().collect();
+    let use_o = args.contains(&"-o".to_string());
 
-    let pattern = env::args().nth(2).unwrap();
+    // Pattern is usually the argument following "-E"
+    let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E").wrapping_add(1);
+    let pattern = &args[pattern_idx];
+
     let mut matched_any = false;
 
     // Use BufReader to iterate over stdin line by line
     for line_result in io::stdin().lock().lines() {
         let line = line_result.unwrap();
 
-        if match_pattern(&line, &pattern) {
-            println!("{}", line);
+        // match_pattern now returns Option<&str> instead of bool
+        if let Some(matched_text) = match_pattern(&line, pattern) {
             matched_any = true;
+
+            if use_o {
+                println!("{}", matched_text);
+            } else {
+                println!("{}", line);
+            }
         }
     }
 
