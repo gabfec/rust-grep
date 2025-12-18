@@ -194,18 +194,13 @@ fn main() {
     let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E") + 1;
     let pattern_str = &args[pattern_idx];
 
-    // If there is an argument after the pattern, it's a file. Otherwise, we read from stdin.
-    let input_buffer = if args.len() > pattern_idx + 1 {
-        let file_path = &args[pattern_idx + 1];
-        fs::read_to_string(file_path).expect("Could not read file")
-    } else {
-        let mut buffer = String::new();
-        io::stdin().read_to_string(&mut buffer).unwrap();
-        buffer
-    };
+    // Collect all file paths (everything after the pattern)
+    let file_paths = &args[pattern_idx + 1..];
 
-    let is_anchored = pattern_str.starts_with('^');
-    let tokens = if is_anchored {
+    // Determine if we should prefix with filenames
+    let show_filename = file_paths.len() > 1;
+
+    let tokens = if pattern_str.starts_with('^') {
         parse_pattern(&pattern_str[1..])
     } else {
         parse_pattern(pattern_str)
@@ -213,36 +208,64 @@ fn main() {
 
     let mut global_matched = false;
 
-    // Split into lines
-    for line in input_buffer.lines() {
+    // Handle Stdin if no files are provided
+    if file_paths.is_empty() {
+        let mut buffer = String::new();
+        io::stdin().read_to_string(&mut buffer).unwrap();
+        process_input(&buffer, &tokens, None, use_o, &mut global_matched, pattern_str.starts_with('^'), false);
+    } else {
+        // Loop through each file
+        for path in file_paths {
+            if let Ok(content) = fs::read_to_string(path) {
+                process_input(&content, &tokens, Some(path), use_o, &mut global_matched, pattern_str.starts_with('^'), show_filename);
+            }
+        }
+    }
+
+    process::exit(if global_matched { 0 } else { 1 });
+}
+
+// Helper to handle the matching logic for a block of text (file or stdin)
+fn process_input(
+    content: &str,
+    tokens: &[Token],
+    filename: Option<&String>,
+    use_o: bool,
+    global_matched: &mut bool,
+    is_anchored: bool,
+    show_filename: bool
+) {
+    for line in content.lines() {
         let mut current_search_text = line;
 
         loop {
-            if let Some(matched_slice) = match_pattern(current_search_text, &tokens) {
-                global_matched = true;
+            if let Some(matched_slice) = match_pattern(current_search_text, tokens) {
+                *global_matched = true;
+
+                // Build the prefix (e.g., "fruits.txt:")
+                let prefix = if show_filename && filename.is_some() {
+                    format!("{}:", filename.unwrap())
+                } else {
+                    "".to_string()
+                };
 
                 if use_o {
-                    println!("{}", matched_slice);
+                    println!("{}{}", prefix, matched_slice);
                 } else {
-                    // Without -o, print the whole line and stop searching this line
-                    println!("{}", line);
-                    break;
+                    println!("{}{}", prefix, line);
+                    break; // Move to next line
                 }
 
                 let advance_by = if matched_slice.is_empty() { 1 } else { matched_slice.len() };
                 if advance_by > current_search_text.len() { break; }
                 current_search_text = &current_search_text[advance_by..];
-
                 if is_anchored || current_search_text.is_empty() { break; }
             } else {
                 if is_anchored || current_search_text.is_empty() { break; }
-
                 let mut chars = current_search_text.chars();
                 chars.next();
                 current_search_text = chars.as_str();
             }
         }
     }
-
-    process::exit(if global_matched { 0 } else { 1 });
 }
