@@ -2,6 +2,7 @@ use std::env;
 use std::io;
 use std::io::Read;
 use std::process;
+use std::fs;
 
 
 #[derive(Debug, Clone)]
@@ -188,8 +189,20 @@ fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a str> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let use_o = args.contains(&"-o".to_string());
+
+    // Find the pattern index
     let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E") + 1;
     let pattern_str = &args[pattern_idx];
+
+    // If there is an argument after the pattern, it's a file. Otherwise, we read from stdin.
+    let input_buffer = if args.len() > pattern_idx + 1 {
+        let file_path = &args[pattern_idx + 1];
+        fs::read_to_string(file_path).expect("Could not read file")
+    } else {
+        let mut buffer = String::new();
+        io::stdin().read_to_string(&mut buffer).unwrap();
+        buffer
+    };
 
     let is_anchored = pattern_str.starts_with('^');
     let tokens = if is_anchored {
@@ -197,9 +210,6 @@ fn main() {
     } else {
         parse_pattern(pattern_str)
     };
-
-    let mut input_buffer = String::new();
-    io::stdin().read_to_string(&mut input_buffer).unwrap();
 
     let mut global_matched = false;
 
