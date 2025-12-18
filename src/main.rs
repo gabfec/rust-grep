@@ -1,6 +1,6 @@
 use std::env;
 use std::io;
-use std::io::BufRead;
+use std::io::Read;
 use std::process;
 
 
@@ -63,15 +63,15 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                     group_buffer.push(inner_c);
                 }
 
-                // 2. Parse the buffer for alternation
-                if let Some(pipe_idx) = group_buffer.find('|') {
-                    let left = parse_pattern(&group_buffer[..pipe_idx]);
-                    let right = parse_pattern(&group_buffer[pipe_idx + 1..]);
-                    tokens.push(Token::Alternation(left, right));
-                } else {
-                    // It was just a group like (abc), treat as literals
-                    tokens.extend(parse_pattern(&group_buffer));
+                // Split by '|' and create a nested tree of Alternations
+                let parts: Vec<&str> = group_buffer.split('|').collect();
+                let mut alt_token = parse_pattern(parts[0]);
+
+                for part in parts.iter().skip(1) {
+                    let next_branch = parse_pattern(part);
+                    alt_token = vec![Token::Alternation(alt_token, next_branch)];
                 }
+                tokens.extend(alt_token);
             }
             '+' => {
                 if let Some(prev) = tokens.pop() {
@@ -116,43 +116,39 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
     match &tokens[0] {
         Token::EndAnchor => { if text.is_empty() { Some(0) } else { None } }
         Token::Alternation(left, right) => {
-            // The "Future" is whatever comes after the alternation group
-            let rest_of_tokens = &tokens[1..];
+            // We need to find the best match at this position.
+            // Standard engines usually pick the first branch that results in a successful
+            // match for the whole pattern.
 
-            // Scenario 1: Try the Left branch + Future
-            let mut left_path = left.clone();
-            left_path.extend_from_slice(rest_of_tokens);
-            if let Some(len) = match_here(&left_path, text) {
-                return Some(len);
+            // Try Left branch + rest
+            if let Some(left_len) = match_here(left, text) {
+                if let Some(rest_len) = match_here(&tokens[1..], &text[left_len..]) {
+                    return Some(left_len + rest_len);
+                }
             }
 
-            // Scenario 2: Try the Right branch + Future
-            let mut right_path = right.clone();
-            right_path.extend_from_slice(rest_of_tokens);
-            if let Some(len) = match_here(&right_path, text) {
-                return Some(len);
+            // Try Right branch + rest
+            if let Some(right_len) = match_here(right, text) {
+                if let Some(rest_len) = match_here(&tokens[1..], &text[right_len..]) {
+                    return Some(right_len + rest_len);
+                }
             }
-
             None
         }
         Token::ZeroOrOne(inner) => {
-            // Path A: The "Zero" case (Skip this token entirely)
-            if let Some(len) = match_here(&tokens[1..], text) {
-                return Some(len);
+            // 1. Try the "One" case first (Greedy)
+            let mut text_chars = text.chars();
+            if let Some(c) = text_chars.next() {
+                if matches_token(inner, c) {
+                    // If the char matches, see if the REST of the pattern matches
+                    if let Some(rest_len) = match_here(&tokens[1..], text_chars.as_str()) {
+                        return Some(1 + rest_len);
+                    }
+                }
             }
 
-            // Path B: The "One" case (Try to match the token once)
-            let mut text_chars = text.chars();
-            match text_chars.next() {
-                Some(c) if matches_token(inner, c) => {
-                    // If it matches, we move to the next token and the rest of the text
-                    if let Some(len) = match_here(&tokens[1..], text_chars.as_str()) {
-                        return Some(1 + len);
-                    }
-                    None
-                }
-                _ => None,
-            }
+            // 2. If the "One" case failed, try the "Zero" case (Skip)
+            match_here(&tokens[1..], text)
         }
         Token::OneOrMore(inner) => {
             let mut text_chars = text.chars();
@@ -176,11 +172,7 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             let mut text_chars = text.chars();
             match text_chars.next() {
                 Some(c) if matches_token(&tokens[0], c) => {
-                    // If the rest of the pattern matches, add 1 (for current char) to that length
-                    if let Some(len) = match_here(&tokens[1..], text_chars.as_str()) {
-                        return Some(1 + len);
-                    }
-                    None
+                    match_here(&tokens[1..], text_chars.as_str()).map(|len| 1 + len)
                 }
                 _ => None,
             }
@@ -188,64 +180,59 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
     }
 }
 
-fn match_pattern<'a>(input_line: &'a str, pattern: &str) -> Option<&'a str> {
-    let tokens = parse_pattern(pattern);
-
-    // Check empty string case
-    if input_line.is_empty() && tokens.is_empty() {
-        return Some("");
-    }
-
-    if pattern.starts_with('^') {
-        // We slice from 1 to remove the '^'
-        let tokens = parse_pattern(&pattern[1..]);
-        // If match_here gives us a length, return that slice of the input
-        return match_here(&tokens, input_line).map(|len| &input_line[..len]);
-    }
-
-    // .char_indices() gives us (byte_index, character)
-    // We only care about the byte_index to slice correctly
-    for (i, _) in input_line.char_indices() {
-        // If match_here gives us a length, return the slice starting at i
-        if let Some(len) = match_here(&tokens, &input_line[i..]) {
-            return Some(&input_line[i..i + len]);
-        }
-    }
-
-    None
+fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a str> {
+    match_here(tokens, input_line).map(|len| &input_line[..len])
 }
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
 fn main() {
     let args: Vec<String> = env::args().collect();
     let use_o = args.contains(&"-o".to_string());
+    let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E") + 1;
+    let pattern_str = &args[pattern_idx];
 
-    // Pattern is usually the argument following "-E"
-    let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E").wrapping_add(1);
-    let pattern = &args[pattern_idx];
+    let is_anchored = pattern_str.starts_with('^');
+    let tokens = if is_anchored {
+        parse_pattern(&pattern_str[1..])
+    } else {
+        parse_pattern(pattern_str)
+    };
 
-    let mut matched_any = false;
+    let mut input_buffer = String::new();
+    io::stdin().read_to_string(&mut input_buffer).unwrap();
 
-    // Use BufReader to iterate over stdin line by line
-    for line_result in io::stdin().lock().lines() {
-        let line = line_result.unwrap();
+    let mut global_matched = false;
 
-        // match_pattern now returns Option<&str> instead of bool
-        if let Some(matched_text) = match_pattern(&line, pattern) {
-            matched_any = true;
+    // Split into lines
+    for line in input_buffer.lines() {
+        let mut current_search_text = line;
 
-            if use_o {
-                println!("{}", matched_text);
+        loop {
+            if let Some(matched_slice) = match_pattern(current_search_text, &tokens) {
+                global_matched = true;
+
+                if use_o {
+                    println!("{}", matched_slice);
+                } else {
+                    // Without -o, print the whole line and stop searching this line
+                    println!("{}", line);
+                    break;
+                }
+
+                let advance_by = if matched_slice.is_empty() { 1 } else { matched_slice.len() };
+                if advance_by > current_search_text.len() { break; }
+                current_search_text = &current_search_text[advance_by..];
+
+                if is_anchored || current_search_text.is_empty() { break; }
             } else {
-                println!("{}", line);
+                if is_anchored || current_search_text.is_empty() { break; }
+
+                let mut chars = current_search_text.chars();
+                chars.next();
+                current_search_text = chars.as_str();
             }
         }
     }
 
-    // Exit with 0 if at least one line matched, otherwise 1
-    if matched_any {
-        process::exit(0);
-    } else {
-        process::exit(1);
-    }
+    process::exit(if global_matched { 0 } else { 1 });
 }
