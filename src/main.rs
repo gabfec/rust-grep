@@ -219,6 +219,7 @@ fn main() {
     io::stdin().read_line(&mut input_line).unwrap();
 
     if match_pattern(&input_line, &pattern) {
+        println!("{}", input_line);
         process::exit(0)
     } else {
         process::exit(1)
