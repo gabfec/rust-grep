@@ -16,6 +16,7 @@ enum Token {
     Alphanumeric,
     BracketGroup(Vec<char>, GroupType),
     EndAnchor,
+    OneOrMore(Box<Token>),
 }
 
 fn parse_pattern(pattern: &str) -> Vec<Token> {
@@ -43,6 +44,11 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                     class_chars.push(next_c);
                 }
                 tokens.push(Token::BracketGroup(class_chars, group_type));
+            },
+            '+' => {
+                if let Some(prev) = tokens.pop() {
+                    tokens.push(Token::OneOrMore(Box::new(prev)));
+                }
             }
             _ => tokens.push(Token::Literal(c)),
         }
@@ -72,21 +78,32 @@ fn match_here(tokens: &[Token], text: &str) -> bool {
         return true; // Pattern exhausted, we matched!
     }
 
-    // If the next token is an EndAnchor, check if we've reached the end of the text
-    if let Token::EndAnchor = tokens[0] {
-        return text.is_empty();
-    }
-
-    let mut text_chars = text.chars();
-    match text_chars.next() {
-        Some(c) => {
-            if matches_token(&tokens[0], c) {
-                // Current char matches, check the rest of the tokens
-                return match_here(&tokens[1..], text_chars.as_str());
+    match &tokens[0] {
+        Token::EndAnchor => return text.is_empty(),
+        Token::OneOrMore(inner) => {
+            let mut text_chars = text.chars();
+            match text_chars.next() {
+                Some(c) => {
+                    if matches_token(inner, c) {
+                        // Path A: Match more of the same (stay on OneOrMore)
+                        // Path B: Move to the next token
+                        return match_here(tokens, text_chars.as_str()) || match_here(&tokens[1..], text_chars.as_str());
+                    }
+                    false
+                }
+                None => false, // Text ended before pattern
             }
-            false
         }
-        None => false, // Text ended before pattern
+        // Handle normal single-character tokens
+        _ => {
+            let mut chars = text.chars();
+            match chars.next() {
+                Some(c) if matches_token(&tokens[0], c) => {
+                    match_here(&tokens[1..], chars.as_str())
+                }
+                _ => false,
+            }
+        }
     }
 }
 
