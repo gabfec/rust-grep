@@ -3,13 +3,13 @@ use std::io;
 use std::process;
 
 
-//#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum GroupType {
     Positive, // [abc]
     Negative, // [^abc]
 }
 
-//#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Token {
     Literal(char),
     Digit,
@@ -19,6 +19,7 @@ enum Token {
     EndAnchor,             // $
     OneOrMore(Box<Token>), // +
     ZeroOrOne(Box<Token>), // ?
+    Alternation(Vec<Token>, Vec<Token>), // |
 }
 
 fn parse_pattern(pattern: &str) -> Vec<Token> {
@@ -47,6 +48,30 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 }
                 tokens.push(Token::BracketGroup(class_chars, group_type));
             },
+            '(' => {
+                // 1. Collect everything inside the parentheses into a buffer
+                let mut group_buffer = String::new();
+                let mut depth = 1;
+
+                while let Some(inner_c) = chars.next() {
+                    if inner_c == '(' { depth += 1; }
+                    else if inner_c == ')' {
+                        depth -= 1;
+                        if depth == 0 { break; }
+                    }
+                    group_buffer.push(inner_c);
+                }
+
+                // 2. Parse the buffer for alternation
+                if let Some(pipe_idx) = group_buffer.find('|') {
+                    let left = parse_pattern(&group_buffer[..pipe_idx]);
+                    let right = parse_pattern(&group_buffer[pipe_idx + 1..]);
+                    tokens.push(Token::Alternation(left, right));
+                } else {
+                    // It was just a group like (abc), treat as literals
+                    tokens.extend(parse_pattern(&group_buffer));
+                }
+            }
             '+' => {
                 if let Some(prev) = tokens.pop() {
                     tokens.push(Token::OneOrMore(Box::new(prev)));
@@ -89,6 +114,26 @@ fn match_here(tokens: &[Token], text: &str) -> bool {
 
     match &tokens[0] {
         Token::EndAnchor => return text.is_empty(),
+        Token::Alternation(left, right) => {
+            // The "Future" is whatever comes after the alternation group
+            let rest_of_tokens = &tokens[1..];
+
+            // Scenario 1: Try the Left branch + Future
+            let mut left_path = left.clone();
+            left_path.extend_from_slice(rest_of_tokens);
+            if match_here(&left_path, text) {
+                return true;
+            }
+
+            // Scenario 2: Try the Right branch + Future
+            let mut right_path = right.clone();
+            right_path.extend_from_slice(rest_of_tokens);
+            if match_here(&right_path, text) {
+                return true;
+            }
+
+            false
+        }
         Token::ZeroOrOne(inner) => {
             // Path A: The "Zero" case (Skip this token entirely)
             // We check if the rest of the tokens match the current text.
