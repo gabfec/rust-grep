@@ -3,6 +3,7 @@ use std::io;
 use std::io::Read;
 use std::process;
 use std::fs;
+use std::path::Path;
 
 
 #[derive(Debug, Clone)]
@@ -189,6 +190,7 @@ fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a str> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let use_o = args.contains(&"-o".to_string());
+    let recursive = args.contains(&"-r".to_string());
 
     // Find the pattern index
     let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E") + 1;
@@ -196,9 +198,6 @@ fn main() {
 
     // Collect all file paths (everything after the pattern)
     let file_paths = &args[pattern_idx + 1..];
-
-    // Determine if we should prefix with filenames
-    let show_filename = file_paths.len() > 1;
 
     let tokens = if pattern_str.starts_with('^') {
         parse_pattern(&pattern_str[1..])
@@ -215,14 +214,39 @@ fn main() {
         process_input(&buffer, &tokens, None, use_o, &mut global_matched, pattern_str.starts_with('^'), false);
     } else {
         // Loop through each file
-        for path in file_paths {
-            if let Ok(content) = fs::read_to_string(path) {
-                process_input(&content, &tokens, Some(path), use_o, &mut global_matched, pattern_str.starts_with('^'), show_filename);
+        for path_str in file_paths {
+            let path = Path::new(path_str);
+            if recursive && path.is_dir() {
+                // Recursive mode: always show prefix
+                visit_dirs(path, &tokens, use_o, &mut global_matched, pattern_str.starts_with('^'));
+            } else if path.is_file() {
+                // If multiple files were passed at the CLI, show filename
+                let show_filename = file_paths.len() > 1;
+                if let Ok(content) = fs::read_to_string(path) {
+                    process_input(&content, &tokens, Some(&path_str.to_string()), use_o, &mut global_matched, pattern_str.starts_with('^'), show_filename);
+                }
             }
         }
     }
 
     process::exit(if global_matched { 0 } else { 1 });
+}
+
+// Recursive function to walk directories
+fn visit_dirs(dir: &Path, tokens: &[Token], use_o: bool, global_matched: &mut bool, is_anchored: bool) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit_dirs(&path, tokens, use_o, global_matched, is_anchored);
+            } else {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    let path_display = path.to_string_lossy().to_string();
+                    process_input(&content, tokens, Some(&path_display), use_o, global_matched, is_anchored, true);
+                }
+            }
+        }
+    }
 }
 
 // Helper to handle the matching logic for a block of text (file or stdin)
