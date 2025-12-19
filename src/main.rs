@@ -22,6 +22,7 @@ enum Token {
     EndAnchor,             // $
     OneOrMore(Box<Token>), // +
     ZeroOrOne(Box<Token>), // ?
+    ZeroOrMore(Box<Token>), // *
     Alternation(Vec<Token>, Vec<Token>), // |
 }
 
@@ -83,6 +84,11 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
             '?' => {
                 if let Some(prev) = tokens.pop() {
                     tokens.push(Token::ZeroOrOne(Box::new(prev)));
+                }
+            },
+            '*' => {
+                if let Some(prev) = tokens.pop() {
+                    tokens.push(Token::ZeroOrMore(Box::new(prev)));
                 }
             },
             '.' => tokens.push(Token::Wildcard),
@@ -168,6 +174,24 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
                 }
                 _ => None,
             }
+        }
+        Token::ZeroOrMore(inner) => {
+            // Greedy: try to match 'inner' as many times as possible
+            let mut text_chars = text.chars();
+
+            // First, try matching the pattern moving forward (consuming one 'inner')
+            if let Some(c) = text_chars.next() {
+                if matches_token(inner, c) {
+                    // Recurse on ZeroOrMore (to match another)
+                    if let Some(len) = match_here(tokens, text_chars.as_str()) {
+                        return Some(1 + len);
+                    }
+                }
+            }
+
+            // Fallback (Zero case): If we can't match 'inner' anymore,
+            // or the 'rest' failed after matching, try matching the rest of the tokens
+            match_here(&tokens[1..], text)
         }
         // Handle normal single-character tokens
         _ => {
