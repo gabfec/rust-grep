@@ -23,6 +23,7 @@ enum Token {
     OneOrMore(Box<Token>), // +
     ZeroOrOne(Box<Token>), // ?
     ZeroOrMore(Box<Token>), // *
+    Exact(Box<Token>, usize), // {n}
     Alternation(Vec<Token>, Vec<Token>), // |
 }
 
@@ -76,6 +77,21 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 }
                 tokens.extend(alt_token);
             }
+            '{' => {
+                let mut num_str = String::new();
+                while let Some(&next_c) = chars.peek() {
+                    if next_c == '}' {
+                        chars.next(); // Consume '}'
+                        break;
+                    }
+                    num_str.push(chars.next().unwrap());
+                }
+                if let Ok(n) = num_str.parse::<usize>() {
+                    if let Some(prev) = tokens.pop() {
+                        tokens.push(Token::Exact(Box::new(prev), n));
+                    }
+                }
+            },
             '+' => {
                 if let Some(prev) = tokens.pop() {
                     tokens.push(Token::OneOrMore(Box::new(prev)));
@@ -192,6 +208,26 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             // Fallback (Zero case): If we can't match 'inner' anymore,
             // or the 'rest' failed after matching, try matching the rest of the tokens
             match_here(&tokens[1..], text)
+        }
+        Token::Exact(inner, n) => {
+            if *n == 0 {
+                // We have matched the required amount, move to the rest of the pattern
+                return match_here(&tokens[1..], text);
+            } else {
+                // Try to match the 'inner' token once
+                let mut text_chars = text.chars();
+                if let Some(c) = text_chars.next() {
+                    if matches_token(inner, c) {
+                        // Construct a temporary token for the "remaining" matches
+                        let remaining_token = Token::Exact(inner.clone(), n - 1);
+                        let mut new_tokens = vec![remaining_token];
+                        new_tokens.extend_from_slice(&tokens[1..]);
+
+                        return match_here(&new_tokens, text_chars.as_str());
+                    }
+                }
+                None
+            }
         }
         // Handle normal single-character tokens
         _ => {
