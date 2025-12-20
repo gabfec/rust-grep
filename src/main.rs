@@ -25,6 +25,7 @@ enum Token {
     ZeroOrMore(Box<Token>), // *
     Exact(Box<Token>, usize), // {n}
     AtLeast(Box<Token>, usize), // {n,}
+    Between(Box<Token>, usize, usize), // {n,m}
     Alternation(Vec<Token>, Vec<Token>), // |
 }
 
@@ -92,20 +93,23 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                     buffer.push(chars.next().unwrap());
                 }
 
-                if buffer.contains(',') {
-                    // Handle {n,}
-                    let n_str = buffer.replace(',', "");
-                    if let Ok(n) = n_str.trim().parse::<usize>() {
-                        if let Some(prev) = tokens.pop() {
+                if let Some(prev) = tokens.pop() {
+                    if buffer.contains(',') {
+                        let parts: Vec<&str> = buffer.split(',').collect();
+                        let n = parts[0].trim().parse::<usize>().unwrap_or(0);
+
+                        if parts[1].trim().is_empty() {
+                            // {n,}
                             tokens.push(Token::AtLeast(Box::new(prev), n));
+                        } else {
+                            // {n,m}
+                            let m = parts[1].trim().parse::<usize>().unwrap_or(n);
+                            tokens.push(Token::Between(Box::new(prev), n, m));
                         }
-                    }
-                } else {
-                    // Handle {n}
-                    if let Ok(n) = buffer.parse::<usize>() {
-                        if let Some(prev) = tokens.pop() {
-                            tokens.push(Token::Exact(Box::new(prev), n));
-                        }
+                    } else {
+                        // Handle {n}
+                        let n = buffer.parse::<usize>().unwrap_or(0);
+                        tokens.push(Token::Exact(Box::new(prev), n));
                     }
                 }
             },
@@ -262,6 +266,38 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
                 // Fallback: match the rest of the pattern
                 match_here(&tokens[1..], text)
             }
+        }
+        Token::Between(inner, n, m) => {
+            if *m == 0 {
+                // We've hit the maximum allowed matches, move to the rest of the pattern
+                return match_here(&tokens[1..], text);
+            }
+
+            // Mandatory match phase
+            if *n > 0 {
+                if let Some(inner_len) = match_here(&[*inner.clone()], text) {
+                    let next_token = Token::Between(inner.clone(), n - 1, m - 1);
+                    let mut sequence = vec![next_token];
+                    sequence.extend_from_slice(&tokens[1..]);
+                    return match_here(&sequence, &text[inner_len..]);
+                }
+                return None; // Failed to meet minimum 'n'
+            }
+
+            // Optional match phase (0 < remaining_matches <= m)
+            // Try to match one more 'inner' greedily
+            if let Some(inner_len) = match_here(&[*inner.clone()], text) {
+                let next_token = Token::Between(inner.clone(), 0, m - 1);
+                let mut sequence = vec![next_token];
+                sequence.extend_from_slice(&tokens[1..]);
+
+                if let Some(total_len) = match_here(&sequence, &text[inner_len..]) {
+                    return Some(total_len);
+                }
+            }
+
+            // If matching more failed, or we chose not to, match the rest of the pattern
+            match_here(&tokens[1..], text)
         }
         // Handle normal single-character tokens
         _ => {
