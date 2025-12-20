@@ -69,13 +69,17 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
 
                 // Split by '|' and create a nested tree of Alternations
                 let parts: Vec<&str> = group_buffer.split('|').collect();
-                let mut alt_token = parse_pattern(parts[0]);
-
-                for part in parts.iter().skip(1) {
-                    let next_branch = parse_pattern(part);
-                    alt_token = vec![Token::Alternation(alt_token, next_branch)];
+                if parts.len() > 1 {
+                    let mut alt_token = Token::Alternation(parse_pattern(parts[0]), parse_pattern(parts[1]));
+                    for part in parts.iter().skip(2) {
+                        alt_token = Token::Alternation(vec![alt_token], parse_pattern(part));
+                    }
+                    tokens.push(alt_token);
+                } else {
+                    tokens.push(Token::Exact(Box::new(Token::Literal(' ')), 0)); // Placeholder or Group logic
+                    // Simplified for now: just parse the inside as tokens
+                    tokens.extend(parse_pattern(&group_buffer));
                 }
-                tokens.extend(alt_token);
             }
             '{' => {
                 let mut num_str = String::new();
@@ -213,21 +217,16 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             if *n == 0 {
                 // We have matched the required amount, move to the rest of the pattern
                 return match_here(&tokens[1..], text);
-            } else {
-                // Try to match the 'inner' token once
-                let mut text_chars = text.chars();
-                if let Some(c) = text_chars.next() {
-                    if matches_token(inner, c) {
-                        // Construct a temporary token for the "remaining" matches
-                        let remaining_token = Token::Exact(inner.clone(), n - 1);
-                        let mut new_tokens = vec![remaining_token];
-                        new_tokens.extend_from_slice(&tokens[1..]);
-
-                        return match_here(&new_tokens, text_chars.as_str());
-                    }
-                }
-                None
             }
+            // Call match_here on just the inner token to see if it matches at the current position
+            if let Some(inner_len) = match_here(&[*inner.clone()], text) {
+                // If it matches, we need to match it (n-1) more times
+                let next_token = Token::Exact(inner.clone(), n - 1);
+                let mut sequence = vec![next_token];
+                sequence.extend_from_slice(&tokens[1..]);
+                return match_here(&sequence, &text[inner_len..]);
+            }
+            None
         }
         // Handle normal single-character tokens
         _ => {
@@ -322,6 +321,7 @@ fn process_input(
     for line in content.lines() {
         let mut current_search_text = line;
 
+        // Keep searching this specific line until we can't find any more matches
         loop {
             if let Some(matched_slice) = match_pattern(current_search_text, tokens) {
                 *global_matched = true;
@@ -335,19 +335,27 @@ fn process_input(
 
                 if use_o {
                     println!("{}{}", prefix, matched_slice);
-                } else {
-                    println!("{}{}", prefix, line);
-                    break; // Move to next line
-                }
 
-                let advance_by = if matched_slice.is_empty() { 1 } else { matched_slice.len() };
-                if advance_by > current_search_text.len() { break; }
-                current_search_text = &current_search_text[advance_by..];
-                if is_anchored || current_search_text.is_empty() { break; }
+                    // Move past the current match to find the NEXT match on this line
+                    let advance_by = if matched_slice.is_empty() { 1 } else { matched_slice.len() };
+
+                    // Check if we can still advance
+                    if advance_by > current_search_text.len() { break; }
+                    current_search_text = &current_search_text[advance_by..];
+
+                    // If anchored, we only care about the very start of the line
+                    if is_anchored || current_search_text.is_empty() { break; }
+                } else {
+                    // Not -o mode: Print the whole line and jump to the next line in content.lines()
+                    println!("{}{}", prefix, line);
+                    break;
+                }
             } else {
-                if is_anchored || current_search_text.is_empty() { break; }
+                // No match at current index. Slide the window 1 character to try matching at index 1, 2, etc.
+                if is_anchored { break; }
+
                 let mut chars = current_search_text.chars();
-                chars.next();
+                if chars.next().is_none() { break; }
                 current_search_text = chars.as_str();
             }
         }
