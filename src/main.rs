@@ -26,10 +26,14 @@ enum Token {
     Backreference(usize), // \1, \2, etc.
 }
 
-fn parse_pattern(pattern: &str) -> Vec<Token> {
+fn parse_regex(pattern: &str) -> Vec<Token> {
+    let mut group_counter = 0;
+    parse_pattern(pattern, &mut group_counter)
+}
+
+fn parse_pattern(pattern: &str, group_counter: &mut usize) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = pattern.chars().peekable();
-    let mut group_counter = 0; // Track group IDs
 
     while let Some(c) = chars.next() {
         match c {
@@ -59,9 +63,10 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 tokens.push(Token::BracketGroup(class_chars, group_type));
             },
             '(' => {
-                group_counter += 1;
-                let current_group_id = group_counter;
-                // Collect everything inside the parentheses into a buffer
+                *group_counter += 1;
+                let current_group_id = *group_counter;
+
+               // Collect everything inside the parentheses into a buffer
                 let mut group_buffer = String::new();
                 let mut depth = 1;
 
@@ -77,18 +82,20 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 // If it contains a pipe, it's an Alternation
                 if group_buffer.contains('|') {
                     let parts: Vec<&str> = group_buffer.split('|').collect();
-                    // Start with the first two parts
-                    let mut alt_token = Token::Alternation(parse_pattern(parts[0]), parse_pattern(parts[1]));
+                    let mut alt_token = Token::Alternation(
+                        parse_pattern(parts[0], group_counter),
+                        parse_pattern(parts[1], group_counter)
+                    );
 
                     // Nest any additional parts
                     for part in parts.iter().skip(2) {
-                        alt_token = Token::Alternation(vec![alt_token], parse_pattern(part));
+                        alt_token = Token::Alternation(vec![alt_token], parse_pattern(part, group_counter));
                     }
-                    tokens.push(alt_token);
+                    tokens.push(Token::Group(vec![alt_token], current_group_id));
                 } else {
                     // If no pipe, wrap the sequence in a Group
                     // This allows the next quantifier to pop the whole group
-                    let group_tokens = parse_pattern(&group_buffer);
+                    let group_tokens = parse_pattern(&group_buffer, group_counter);
                     tokens.push(Token::Group(group_tokens, current_group_id));
                 }
             }
@@ -162,13 +169,17 @@ fn match_here(tokens: &[Token], text: &str, captures: &mut Vec<Option<String>>) 
             // match for the whole pattern.
 
             // Try Left branch + rest
-            if let Some(left_len) = match_here(left, text, captures) {
-                if let Some(rest_len) = match_here(&tokens[1..], &text[left_len..], captures) {
+            let mut left_captures = captures.clone();
+            if let Some(left_len) = match_here(left, text, &mut left_captures) {
+                if let Some(rest_len) = match_here(&tokens[1..], &text[left_len..], &mut left_captures) {
+                    *captures = left_captures;
                     return Some(left_len + rest_len);
                 }
             }
-            if let Some(right_len) = match_here(right, text, captures) {
-                if let Some(rest_len) = match_here(&tokens[1..], &text[right_len..], captures) {
+            let mut right_captures = captures.clone();
+            if let Some(right_len) = match_here(right, text, &mut right_captures) {
+                if let Some(rest_len) = match_here(&tokens[1..], &text[right_len..], &mut right_captures) {
+                    *captures = right_captures;
                     return Some(right_len + rest_len);
                 }
             }
@@ -266,9 +277,9 @@ fn main() {
     let file_paths = &args[pattern_idx + 1..];
 
     let tokens = if pattern_str.starts_with('^') {
-        parse_pattern(&pattern_str[1..])
+        parse_regex(&pattern_str[1..])
     } else {
-        parse_pattern(pattern_str)
+        parse_regex(pattern_str)
     };
 
     let mut global_matched = false;
