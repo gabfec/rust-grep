@@ -20,13 +20,9 @@ enum Token {
     Wildcard,
     BracketGroup(Vec<char>, GroupType),
     EndAnchor,             // $
-    OneOrMore(Box<Token>), // +
-    ZeroOrOne(Box<Token>), // ?
-    ZeroOrMore(Box<Token>), // *
-    Exact(Box<Token>, usize), // {n}
-    AtLeast(Box<Token>, usize), // {n,}
-    Between(Box<Token>, usize, usize), // {n,m}
+    Quantifier(Box<Token>, usize, Option<usize>), // {n,}, {n,}, {n,m}, ?, *, +
     Alternation(Vec<Token>, Vec<Token>), // |
+    Group(Vec<Token>),
 }
 
 fn parse_pattern(pattern: &str) -> Vec<Token> {
@@ -56,7 +52,7 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 tokens.push(Token::BracketGroup(class_chars, group_type));
             },
             '(' => {
-                // 1. Collect everything inside the parentheses into a buffer
+                // Collect everything inside the parentheses into a buffer
                 let mut group_buffer = String::new();
                 let mut depth = 1;
 
@@ -69,63 +65,54 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                     group_buffer.push(inner_c);
                 }
 
-                // Split by '|' and create a nested tree of Alternations
-                let parts: Vec<&str> = group_buffer.split('|').collect();
-                if parts.len() > 1 {
+                // If it contains a pipe, it's an Alternation
+                if group_buffer.contains('|') {
+                    let parts: Vec<&str> = group_buffer.split('|').collect();
+                    // Start with the first two parts
                     let mut alt_token = Token::Alternation(parse_pattern(parts[0]), parse_pattern(parts[1]));
+
+                    // Nest any additional parts
                     for part in parts.iter().skip(2) {
                         alt_token = Token::Alternation(vec![alt_token], parse_pattern(part));
                     }
                     tokens.push(alt_token);
                 } else {
-                    tokens.push(Token::Exact(Box::new(Token::Literal(' ')), 0)); // Placeholder or Group logic
-                    // Simplified for now: just parse the inside as tokens
-                    tokens.extend(parse_pattern(&group_buffer));
+                    // If no pipe, wrap the sequence in a Group
+                    // This allows the next quantifier to pop the whole group
+                    let group_tokens = parse_pattern(&group_buffer);
+                    tokens.push(Token::Group(group_tokens));
                 }
             }
             '{' => {
                 let mut buffer = String::new();
                 while let Some(&next_c) = chars.peek() {
-                    if next_c == '}' {
-                        chars.next(); // Consume '}'
-                        break;
-                    }
+                    if next_c == '}' { chars.next(); break; }
                     buffer.push(chars.next().unwrap());
                 }
-
                 if let Some(prev) = tokens.pop() {
+                    let parts: Vec<&str> = buffer.split(',').collect();
+                    let n = parts[0].trim().parse().unwrap_or(0);
                     if buffer.contains(',') {
-                        let parts: Vec<&str> = buffer.split(',').collect();
-                        let n = parts[0].trim().parse::<usize>().unwrap_or(0);
-
-                        if parts[1].trim().is_empty() {
-                            // {n,}
-                            tokens.push(Token::AtLeast(Box::new(prev), n));
-                        } else {
-                            // {n,m}
-                            let m = parts[1].trim().parse::<usize>().unwrap_or(n);
-                            tokens.push(Token::Between(Box::new(prev), n, m));
-                        }
+                        let m = parts[1].trim().parse().ok();
+                        tokens.push(Token::Quantifier(Box::new(prev), n, m));
                     } else {
-                        // Handle {n}
-                        let n = buffer.parse::<usize>().unwrap_or(0);
-                        tokens.push(Token::Exact(Box::new(prev), n));
+                        tokens.push(Token::Quantifier(Box::new(prev), n, Some(n)));
                     }
                 }
             },
             '+' => {
                 if let Some(prev) = tokens.pop() {
-                    tokens.push(Token::OneOrMore(Box::new(prev)));
+                    tokens.push(Token::Quantifier(Box::new(prev), 1, None));
                 }
             },
             '?' => {
                 if let Some(prev) = tokens.pop() {
-                    tokens.push(Token::ZeroOrOne(Box::new(prev)));
+                    tokens.push(Token::Quantifier(Box::new(prev), 0, Some(1)));
                 }
             },
             '*' => {
                 if let Some(prev) = tokens.pop() {
-                    tokens.push(Token::ZeroOrMore(Box::new(prev)));
+                    tokens.push(Token::Quantifier(Box::new(prev), 0, None));
                 }
             },
             '.' => tokens.push(Token::Wildcard),
@@ -180,124 +167,42 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             }
             None
         }
-        Token::ZeroOrOne(inner) => {
-            // 1. Try the "One" case first (Greedy)
-            let mut text_chars = text.chars();
-            if let Some(c) = text_chars.next() {
-                if matches_token(inner, c) {
-                    // If the char matches, see if the REST of the pattern matches
-                    if let Some(rest_len) = match_here(&tokens[1..], text_chars.as_str()) {
-                        return Some(1 + rest_len);
-                    }
-                }
-            }
-
-            // 2. If the "One" case failed, try the "Zero" case (Skip)
-            match_here(&tokens[1..], text)
-        }
-        Token::OneOrMore(inner) => {
-            let mut text_chars = text.chars();
-            match text_chars.next() {
-                Some(c) if matches_token(inner, c) => {
-                    // Path A: Match more of the same (stay on OneOrMore)
-                    if let Some(len) = match_here(tokens, text_chars.as_str()) {
-                        return Some(1 + len);
-                    }
-                    // Path B: Move to the next token
-                    if let Some(len) = match_here(&tokens[1..], text_chars.as_str()) {
-                        return Some(1 + len);
-                    }
-                    None
-                }
-                _ => None,
-            }
-        }
-        Token::ZeroOrMore(inner) => {
-            // Greedy: try to match 'inner' as many times as possible
-            let mut text_chars = text.chars();
-
-            // First, try matching the pattern moving forward (consuming one 'inner')
-            if let Some(c) = text_chars.next() {
-                if matches_token(inner, c) {
-                    // Recurse on ZeroOrMore (to match another)
-                    if let Some(len) = match_here(tokens, text_chars.as_str()) {
-                        return Some(1 + len);
-                    }
-                }
-            }
-
-            // Fallback (Zero case): If we can't match 'inner' anymore,
-            // or the 'rest' failed after matching, try matching the rest of the tokens
-            match_here(&tokens[1..], text)
-        }
-        Token::Exact(inner, n) => {
-            if *n == 0 {
-                // We have matched the required amount, move to the rest of the pattern
-                return match_here(&tokens[1..], text);
-            }
-            // Call match_here on just the inner token to see if it matches at the current position
-            if let Some(inner_len) = match_here(&[*inner.clone()], text) {
-                // If it matches, we need to match it (n-1) more times
-                let next_token = Token::Exact(inner.clone(), n - 1);
-                let mut sequence = vec![next_token];
-                sequence.extend_from_slice(&tokens[1..]);
-                return match_here(&sequence, &text[inner_len..]);
-            }
-            None
-        }
-        Token::AtLeast(inner, n) => {
-            if *n > 0 {
-                // Mandatory match: We still need to satisfy the 'n' requirement
-                if let Some(inner_len) = match_here(&[*inner.clone()], text) {
-                    let next_token = Token::AtLeast(inner.clone(), n - 1);
-                    let mut sequence = vec![next_token];
-                    sequence.extend_from_slice(&tokens[1..]);
-                    return match_here(&sequence, &text[inner_len..]);
-                }
-                None
+        Token::Group(inner_tokens) => {
+            if let Some(group_len) = match_here(inner_tokens, text) {
+                match_here(&tokens[1..], &text[group_len..]).map(|rest_len| group_len + rest_len)
             } else {
-                // Optional match: Act greedily like ZeroOrMore
-                // Try to match one more 'inner' and stay in AtLeast(0)
-                if let Some(inner_len) = match_here(&[*inner.clone()], text) {
-                    if let Some(total_len) = match_here(tokens, &text[inner_len..]) {
-                        return Some(inner_len + total_len);
-                    }
-                }
-                // Fallback: match the rest of the pattern
-                match_here(&tokens[1..], text)
+                None
             }
         }
-        Token::Between(inner, n, m) => {
-            if *m == 0 {
-                // We've hit the maximum allowed matches, move to the rest of the pattern
+        Token::Quantifier(inner, min, max) => {
+            // If we've hit the maximum allowed matches (Some(0)), move to the rest of the pattern
+            if let Some(0) = max {
                 return match_here(&tokens[1..], text);
             }
 
-            // Mandatory match phase
-            if *n > 0 {
-                if let Some(inner_len) = match_here(&[*inner.clone()], text) {
-                    let next_token = Token::Between(inner.clone(), n - 1, m - 1);
-                    let mut sequence = vec![next_token];
-                    sequence.extend_from_slice(&tokens[1..]);
-                    return match_here(&sequence, &text[inner_len..]);
-                }
-                return None; // Failed to meet minimum 'n'
-            }
-
-            // Optional match phase (0 < remaining_matches <= m)
-            // Try to match one more 'inner' greedily
+            // Greedy Attempt: Try to match the 'inner' token once
             if let Some(inner_len) = match_here(&[*inner.clone()], text) {
-                let next_token = Token::Between(inner.clone(), 0, m - 1);
+                let next_min = if *min > 0 { min - 1 } else { 0 };
+                let next_max = max.map(|m| m - 1);
+
+                // Construct the "next" state for the quantifier
+                let next_token = Token::Quantifier(inner.clone(), next_min, next_max);
                 let mut sequence = vec![next_token];
                 sequence.extend_from_slice(&tokens[1..]);
 
+                // Try to match as many as possible (Greedy)
                 if let Some(total_len) = match_here(&sequence, &text[inner_len..]) {
-                    return Some(total_len);
+                    return Some(inner_len + total_len);
                 }
             }
 
-            // If matching more failed, or we chose not to, match the rest of the pattern
-            match_here(&tokens[1..], text)
+            // Backtracking/Fallback: If matching 'inner' failed (or greediness failed),
+            // we can only succeed if we have already met the 'min' requirement.
+            if *min == 0 {
+                match_here(&tokens[1..], text)
+            } else {
+                None
+            }
         }
         // Handle normal single-character tokens
         _ => {
