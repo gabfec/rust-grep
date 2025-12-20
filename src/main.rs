@@ -182,17 +182,20 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
 
             // Greedy Attempt: Try to match the 'inner' token once
             if let Some(inner_len) = match_here(&[*inner.clone()], text) {
-                let next_min = if *min > 0 { min - 1 } else { 0 };
-                let next_max = max.map(|m| m - 1);
+                // Only recurse if we actually consumed something OR we are satisfying 'min'
+                if inner_len > 0 || *min > 0 {
+                    let next_min = if *min > 0 { min - 1 } else { 0 };
+                    let next_max = max.map(|m| m - 1);
 
-                // Construct the "next" state for the quantifier
-                let next_token = Token::Quantifier(inner.clone(), next_min, next_max);
-                let mut sequence = vec![next_token];
-                sequence.extend_from_slice(&tokens[1..]);
+                    // Construct the "next" state for the quantifier
+                    let next_token = Token::Quantifier(inner.clone(), next_min, next_max);
+                    let mut sequence = vec![next_token];
+                    sequence.extend_from_slice(&tokens[1..]);
 
-                // Try to match as many as possible (Greedy)
-                if let Some(total_len) = match_here(&sequence, &text[inner_len..]) {
-                    return Some(inner_len + total_len);
+                    // Try to match as many as possible (Greedy)
+                    if let Some(total_len) = match_here(&sequence, &text[inner_len..]) {
+                        return Some(inner_len + total_len);
+                    }
                 }
             }
 
@@ -207,12 +210,14 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
         // Handle normal single-character tokens
         _ => {
             let mut text_chars = text.chars();
-            match text_chars.next() {
-                Some(c) if matches_token(&tokens[0], c) => {
-                    match_here(&tokens[1..], text_chars.as_str()).map(|len| 1 + len)
+            if let Some(c) = text_chars.next() {
+                if matches_token(&tokens[0], c) {
+                    let char_len = c.len_utf8();
+                    return match_here(&tokens[1..], &text[char_len..])
+                        .map(|rest_len| char_len + rest_len);
                 }
-                _ => None,
             }
+            None
         }
     }
 }
