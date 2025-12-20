@@ -22,18 +22,25 @@ enum Token {
     EndAnchor,             // $
     Quantifier(Box<Token>, usize, Option<usize>), // {n,}, {n,}, {n,m}, ?, *, +
     Alternation(Vec<Token>, Vec<Token>), // |
-    Group(Vec<Token>),
+    Group(Vec<Token>, usize), // Index of this group
+    Backreference(usize), // \1, \2, etc.
 }
 
 fn parse_pattern(pattern: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = pattern.chars().peekable();
+    let mut group_counter = 0; // Track group IDs
 
     while let Some(c) = chars.next() {
         match c {
             '\\' => match chars.next() {
                 Some('d') => tokens.push(Token::Digit),
                 Some('w') => tokens.push(Token::Alphanumeric),
+                Some(digit) if digit.is_digit(10) => {
+                    // Handle \1, \2, \3...
+                    let n = digit.to_digit(10).unwrap() as usize;
+                    tokens.push(Token::Backreference(n));
+                }
                 Some(escaped) => tokens.push(Token::Literal(escaped)),
                 None => {}
             },
@@ -52,6 +59,8 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 tokens.push(Token::BracketGroup(class_chars, group_type));
             },
             '(' => {
+                group_counter += 1;
+                let current_group_id = group_counter;
                 // Collect everything inside the parentheses into a buffer
                 let mut group_buffer = String::new();
                 let mut depth = 1;
@@ -80,7 +89,7 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                     // If no pipe, wrap the sequence in a Group
                     // This allows the next quantifier to pop the whole group
                     let group_tokens = parse_pattern(&group_buffer);
-                    tokens.push(Token::Group(group_tokens));
+                    tokens.push(Token::Group(group_tokens, current_group_id));
                 }
             }
             '{' => {
@@ -140,7 +149,7 @@ fn matches_token(token: &Token, c: char) -> bool {
 }
 
 // Checks if the pattern matches starting exactly at the beginning of 'text'
-fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
+fn match_here(tokens: &[Token], text: &str, captures: &mut Vec<Option<String>>) -> Option<usize> {
     if tokens.is_empty() {
         return Some(0); // Pattern exhausted, we matched!
     }
@@ -153,35 +162,51 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             // match for the whole pattern.
 
             // Try Left branch + rest
-            if let Some(left_len) = match_here(left, text) {
-                if let Some(rest_len) = match_here(&tokens[1..], &text[left_len..]) {
+            if let Some(left_len) = match_here(left, text, captures) {
+                if let Some(rest_len) = match_here(&tokens[1..], &text[left_len..], captures) {
                     return Some(left_len + rest_len);
                 }
             }
-
-            // Try Right branch + rest
-            if let Some(right_len) = match_here(right, text) {
-                if let Some(rest_len) = match_here(&tokens[1..], &text[right_len..]) {
+            if let Some(right_len) = match_here(right, text, captures) {
+                if let Some(rest_len) = match_here(&tokens[1..], &text[right_len..], captures) {
                     return Some(right_len + rest_len);
                 }
             }
             None
         }
-        Token::Group(inner_tokens) => {
-            if let Some(group_len) = match_here(inner_tokens, text) {
-                match_here(&tokens[1..], &text[group_len..]).map(|rest_len| group_len + rest_len)
+        Token::Group(inner_tokens, id) => {
+            if let Some(group_len) = match_here(inner_tokens, text, captures) {
+                // Ensure the Vec is big enough to hold this group ID
+                if captures.len() < *id {
+                    captures.resize(*id, None);
+                }
+                captures[*id - 1] = Some(text[..group_len].to_string());
+
+                match_here(&tokens[1..], &text[group_len..], captures)
+                    .map(|rest_len| group_len + rest_len)
             } else {
                 None
             }
         }
+        Token::Backreference(n) => {
+            // Check if we have a capture for this index
+            if let Some(Some(captured_val)) = captures.get(*n - 1) {
+                if text.starts_with(captured_val.as_str()) {
+                    let len = captured_val.len();
+                    return match_here(&tokens[1..], &text[len..], captures)
+                        .map(|rest_len| len + rest_len);
+                }
+            }
+            None
+        }
         Token::Quantifier(inner, min, max) => {
             // If we've hit the maximum allowed matches (Some(0)), move to the rest of the pattern
             if let Some(0) = max {
-                return match_here(&tokens[1..], text);
+                return match_here(&tokens[1..], text, captures);
             }
 
             // Greedy Attempt: Try to match the 'inner' token once
-            if let Some(inner_len) = match_here(&[*inner.clone()], text) {
+            if let Some(inner_len) = match_here(&[*inner.clone()], text, captures) {
                 // Only recurse if we actually consumed something OR we are satisfying 'min'
                 if inner_len > 0 || *min > 0 {
                     let next_min = if *min > 0 { min - 1 } else { 0 };
@@ -193,7 +218,7 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
                     sequence.extend_from_slice(&tokens[1..]);
 
                     // Try to match as many as possible (Greedy)
-                    if let Some(total_len) = match_here(&sequence, &text[inner_len..]) {
+                    if let Some(total_len) = match_here(&sequence, &text[inner_len..], captures) {
                         return Some(inner_len + total_len);
                     }
                 }
@@ -202,7 +227,7 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             // Backtracking/Fallback: If matching 'inner' failed (or greediness failed),
             // we can only succeed if we have already met the 'min' requirement.
             if *min == 0 {
-                match_here(&tokens[1..], text)
+                match_here(&tokens[1..], text, captures)
             } else {
                 None
             }
@@ -213,7 +238,7 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
             if let Some(c) = text_chars.next() {
                 if matches_token(&tokens[0], c) {
                     let char_len = c.len_utf8();
-                    return match_here(&tokens[1..], &text[char_len..])
+                    return match_here(&tokens[1..], &text[char_len..], captures)
                         .map(|rest_len| char_len + rest_len);
                 }
             }
@@ -223,7 +248,8 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
 }
 
 fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a str> {
-    match_here(tokens, input_line).map(|len| &input_line[..len])
+    let mut captures: Vec<Option<String>> = Vec::new();
+    match_here(tokens, input_line, &mut captures).map(|len| &input_line[..len])
 }
 
 // Usage: echo <input_text> | your_program.sh -E <pattern>
