@@ -24,6 +24,7 @@ enum Token {
     ZeroOrOne(Box<Token>), // ?
     ZeroOrMore(Box<Token>), // *
     Exact(Box<Token>, usize), // {n}
+    AtLeast(Box<Token>, usize), // {n,}
     Alternation(Vec<Token>, Vec<Token>), // |
 }
 
@@ -82,17 +83,29 @@ fn parse_pattern(pattern: &str) -> Vec<Token> {
                 }
             }
             '{' => {
-                let mut num_str = String::new();
+                let mut buffer = String::new();
                 while let Some(&next_c) = chars.peek() {
                     if next_c == '}' {
                         chars.next(); // Consume '}'
                         break;
                     }
-                    num_str.push(chars.next().unwrap());
+                    buffer.push(chars.next().unwrap());
                 }
-                if let Ok(n) = num_str.parse::<usize>() {
-                    if let Some(prev) = tokens.pop() {
-                        tokens.push(Token::Exact(Box::new(prev), n));
+
+                if buffer.contains(',') {
+                    // Handle {n,}
+                    let n_str = buffer.replace(',', "");
+                    if let Ok(n) = n_str.trim().parse::<usize>() {
+                        if let Some(prev) = tokens.pop() {
+                            tokens.push(Token::AtLeast(Box::new(prev), n));
+                        }
+                    }
+                } else {
+                    // Handle {n}
+                    if let Ok(n) = buffer.parse::<usize>() {
+                        if let Some(prev) = tokens.pop() {
+                            tokens.push(Token::Exact(Box::new(prev), n));
+                        }
                     }
                 }
             },
@@ -227,6 +240,28 @@ fn match_here(tokens: &[Token], text: &str) -> Option<usize> {
                 return match_here(&sequence, &text[inner_len..]);
             }
             None
+        }
+        Token::AtLeast(inner, n) => {
+            if *n > 0 {
+                // Mandatory match: We still need to satisfy the 'n' requirement
+                if let Some(inner_len) = match_here(&[*inner.clone()], text) {
+                    let next_token = Token::AtLeast(inner.clone(), n - 1);
+                    let mut sequence = vec![next_token];
+                    sequence.extend_from_slice(&tokens[1..]);
+                    return match_here(&sequence, &text[inner_len..]);
+                }
+                None
+            } else {
+                // Optional match: Act greedily like ZeroOrMore
+                // Try to match one more 'inner' and stay in AtLeast(0)
+                if let Some(inner_len) = match_here(&[*inner.clone()], text) {
+                    if let Some(total_len) = match_here(tokens, &text[inner_len..]) {
+                        return Some(inner_len + total_len);
+                    }
+                }
+                // Fallback: match the rest of the pattern
+                match_here(&tokens[1..], text)
+            }
         }
         // Handle normal single-character tokens
         _ => {
