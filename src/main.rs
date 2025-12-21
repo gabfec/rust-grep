@@ -79,12 +79,27 @@ fn parse_pattern(pattern: &str, group_counter: &mut usize) -> Vec<Token> {
                     group_buffer.push(inner_c);
                 }
 
-                // If it contains a pipe, it's an Alternation
-                if group_buffer.contains('|') {
-                    let parts: Vec<&str> = group_buffer.split('|').collect();
+                // Split by '|' only at the top level of this group
+                let mut parts = Vec::new();
+                let mut current_part = String::new();
+                let mut paren_depth = 0;
+                for char in group_buffer.chars() {
+                    if char == '(' { paren_depth += 1; }
+                    else if char == ')' { paren_depth -= 1; }
+
+                    if char == '|' && paren_depth == 0 {
+                        parts.push(current_part.clone());
+                        current_part.clear();
+                    } else {
+                        current_part.push(char);
+                    }
+                }
+                parts.push(current_part);
+
+                if parts.len() > 1 {
                     let mut alt_token = Token::Alternation(
-                        parse_pattern(parts[0], group_counter),
-                        parse_pattern(parts[1], group_counter)
+                        parse_pattern(&parts[0], group_counter),
+                        parse_pattern(&parts[1], group_counter)
                     );
 
                     // Nest any additional parts
@@ -186,18 +201,28 @@ fn match_here(tokens: &[Token], text: &str, captures: &mut Vec<Option<String>>) 
             None
         }
         Token::Group(inner_tokens, id) => {
-            if let Some(group_len) = match_here(inner_tokens, text, captures) {
-                // Ensure the Vec is big enough to hold this group ID
-                if captures.len() < *id {
-                    captures.resize(*id, None);
-                }
-                captures[*id - 1] = Some(text[..group_len].to_string());
-
-                match_here(&tokens[1..], &text[group_len..], captures)
-                    .map(|rest_len| group_len + rest_len)
-            } else {
-                None
+            // Ensure the Vec is big enough to hold this group ID
+            if captures.len() < *id {
+                captures.resize(*id, None);
             }
+
+            // Standard engines try to match as much as possible, then backtrack.
+            for try_len in (0..=text.len()).rev() {
+                let mut inner_caps = captures.clone();
+
+                if let Some(group_len) = match_here(inner_tokens, &text[..try_len], &mut inner_caps) {
+                    // The inner match must consume exactly the length we are testing
+                    if group_len == try_len {
+                        inner_caps[*id - 1] = Some(text[..group_len].to_string());
+
+                        if let Some(rest_len) = match_here(&tokens[1..], &text[group_len..], &mut inner_caps) {
+                            *captures = inner_caps;
+                            return Some(group_len + rest_len);
+                        }
+                    }
+                }
+            }
+            None
         }
         Token::Backreference(n) => {
             // Check if we have a capture for this index
@@ -215,6 +240,9 @@ fn match_here(tokens: &[Token], text: &str, captures: &mut Vec<Option<String>>) 
             if let Some(0) = max {
                 return match_here(&tokens[1..], text, captures);
             }
+
+            // Save captures state before greedy attempt
+            let saved_captures = captures.clone();
 
             // Greedy Attempt: Try to match the 'inner' token once
             if let Some(inner_len) = match_here(&[*inner.clone()], text, captures) {
@@ -235,8 +263,8 @@ fn match_here(tokens: &[Token], text: &str, captures: &mut Vec<Option<String>>) 
                 }
             }
 
-            // Backtracking/Fallback: If matching 'inner' failed (or greediness failed),
-            // we can only succeed if we have already met the 'min' requirement.
+            // Backtracking/Fallback: Restore captures and try without matching this iteration
+            *captures = saved_captures;
             if *min == 0 {
                 match_here(&tokens[1..], text, captures)
             } else {
