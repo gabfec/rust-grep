@@ -1,6 +1,6 @@
 use std::env;
 use std::io;
-use std::io::Read;
+use std::io::{Read, IsTerminal};
 use std::process;
 use std::fs;
 use std::path::Path;
@@ -295,8 +295,18 @@ fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a str> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let use_o = args.contains(&"-o".to_string());
-    let use_color = args.contains(&"--color=always".to_string());
     let recursive = args.contains(&"-r".to_string());
+
+    let use_color = if args.contains(&"--color=always".to_string()) {
+        true
+    } else if args.contains(&"--color=never".to_string()) {
+        false
+    } else if args.contains(&"--color=auto".to_string()) {
+        io::stdout().is_terminal()
+    } else {
+        // Default grep behavior is usually 'never' unless specified
+        false
+    };
 
     // Find the pattern index
     let pattern_idx = args.iter().position(|r| r == "-E").expect("Missing -E") + 1;
