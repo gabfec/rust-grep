@@ -375,13 +375,15 @@ fn process_input(
 
     for line in content.lines() {
         let mut current_search_text = line;
+        let mut line_buffer = String::new(); // Used to reconstruct the line for multiple highlights
+        let mut line_has_match = false;
+        let mut last_match_end_in_line = 0;
 
-        // Keep searching this specific line until we can't find any more matches
         loop {
             if let Some(matched_slice) = match_pattern(current_search_text, tokens) {
                 *global_matched = true;
+                line_has_match = true;
 
-                // Pre-determine the match appearance
                 let match_text = if use_color {
                     format!("{COLOR_START}{matched_slice}{COLOR_RESET}")
                 } else {
@@ -389,18 +391,18 @@ fn process_input(
                 };
 
                 if use_o {
+                    // -o mode: print each match immediately
                     println!("{prefix}{match_text}");
                 } else {
-                    let offset = line.len() - current_search_text.len();
-                    let start = &line[..offset];
-                    let end = &line[offset + matched_slice.len()..];
-                    // If no color, this simplifies to printing the original line
-                    if use_color {
-                        println!("{prefix}{start}{match_text}{end}");
-                    } else {
-                        println!("{prefix}{line}");
-                    }
-                    break; // Standard mode prints the line once and stops
+                    // Standard mode: calculate where we are in the original line
+                    let offset_in_line = line.len() - current_search_text.len();
+
+                    // Add the "gap" between the last match and this one
+                    line_buffer.push_str(&line[last_match_end_in_line..offset_in_line]);
+                    // Add the colored match
+                    line_buffer.push_str(&match_text);
+
+                    last_match_end_in_line = offset_in_line + matched_slice.len();
                 }
 
                 if is_anchored { break; }
@@ -419,6 +421,13 @@ fn process_input(
                     break;
                 }
             }
+        }
+
+        // After searching the whole line, if we matched in standard mode, print the reconstructed line
+        if !use_o && line_has_match {
+            // Append the rest of the line after the last match
+            line_buffer.push_str(&line[last_match_end_in_line..]);
+            println!("{prefix}{line_buffer}");
         }
     }
 }
