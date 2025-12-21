@@ -295,6 +295,7 @@ fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a str> {
 fn main() {
     let args: Vec<String> = env::args().collect();
     let use_o = args.contains(&"-o".to_string());
+    let use_color = args.contains(&"--color=always".to_string());
     let recursive = args.contains(&"-r".to_string());
 
     // Find the pattern index
@@ -316,19 +317,19 @@ fn main() {
     if file_paths.is_empty() {
         let mut buffer = String::new();
         io::stdin().read_to_string(&mut buffer).unwrap();
-        process_input(&buffer, &tokens, None, use_o, &mut global_matched, pattern_str.starts_with('^'), false);
+        process_input(&buffer, &tokens, None, use_o, use_color, &mut global_matched, pattern_str.starts_with('^'), false);
     } else {
         // Loop through each file
         for path_str in file_paths {
             let path = Path::new(path_str);
             if recursive && path.is_dir() {
                 // Recursive mode: always show prefix
-                visit_dirs(path, &tokens, use_o, &mut global_matched, pattern_str.starts_with('^'));
+                visit_dirs(path, &tokens, use_o, use_color, &mut global_matched, pattern_str.starts_with('^'));
             } else if path.is_file() {
                 // If multiple files were passed at the CLI, show filename
                 let show_filename = file_paths.len() > 1;
                 if let Ok(content) = fs::read_to_string(path) {
-                    process_input(&content, &tokens, Some(&path_str.to_string()), use_o, &mut global_matched, pattern_str.starts_with('^'), show_filename);
+                    process_input(&content, &tokens, Some(&path_str.to_string()), use_o, use_color, &mut global_matched, pattern_str.starts_with('^'), show_filename);
                 }
             }
         }
@@ -338,21 +339,22 @@ fn main() {
 }
 
 // Recursive function to walk directories
-fn visit_dirs(dir: &Path, tokens: &[Token], use_o: bool, global_matched: &mut bool, is_anchored: bool) {
+fn visit_dirs(dir: &Path, tokens: &[Token], use_o: bool, use_color: bool, global_matched: &mut bool, is_anchored: bool) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                visit_dirs(&path, tokens, use_o, global_matched, is_anchored);
-            } else {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let path_display = path.to_string_lossy().to_string();
-                    process_input(&content, tokens, Some(&path_display), use_o, global_matched, is_anchored, true);
-                }
+                visit_dirs(&path, tokens, use_o, use_color, global_matched, is_anchored);
+            } else if let Ok(content) = fs::read_to_string(&path) {
+                let path_display = path.to_string_lossy().to_string();
+                process_input(&content, tokens, Some(&path_display), use_o, use_color, global_matched, is_anchored, true);
             }
         }
     }
 }
+
+const COLOR_START: &str = "\x1b[01;31m";
+const COLOR_RESET: &str = "\x1b[m";
 
 // Helper to handle the matching logic for a block of text (file or stdin)
 fn process_input(
@@ -360,10 +362,17 @@ fn process_input(
     tokens: &[Token],
     filename: Option<&String>,
     use_o: bool,
+    use_color: bool,
     global_matched: &mut bool,
     is_anchored: bool,
-    show_filename: bool
+    show_filename: bool,
 ) {
+    let prefix = if show_filename && filename.is_some() {
+        format!("{}:", filename.unwrap())
+    } else {
+        "".to_string()
+    };
+
     for line in content.lines() {
         let mut current_search_text = line;
 
@@ -372,37 +381,43 @@ fn process_input(
             if let Some(matched_slice) = match_pattern(current_search_text, tokens) {
                 *global_matched = true;
 
-                // Build the prefix (e.g., "fruits.txt:")
-                let prefix = if show_filename && filename.is_some() {
-                    format!("{}:", filename.unwrap())
+                // Pre-determine the match appearance
+                let match_text = if use_color {
+                    format!("{COLOR_START}{matched_slice}{COLOR_RESET}")
                 } else {
-                    "".to_string()
+                    matched_slice.to_string()
                 };
 
                 if use_o {
-                    println!("{}{}", prefix, matched_slice);
-
-                    // Move past the current match to find the NEXT match on this line
-                    let advance_by = if matched_slice.is_empty() { 1 } else { matched_slice.len() };
-
-                    // Check if we can still advance
-                    if advance_by > current_search_text.len() { break; }
-                    current_search_text = &current_search_text[advance_by..];
-
-                    // If anchored, we only care about the very start of the line
-                    if is_anchored || current_search_text.is_empty() { break; }
+                    println!("{prefix}{match_text}");
                 } else {
-                    // Not -o mode: Print the whole line and jump to the next line in content.lines()
-                    println!("{}{}", prefix, line);
-                    break;
+                    let offset = line.len() - current_search_text.len();
+                    let start = &line[..offset];
+                    let end = &line[offset + matched_slice.len()..];
+                    // If no color, this simplifies to printing the original line
+                    if use_color {
+                        println!("{prefix}{start}{match_text}{end}");
+                    } else {
+                        println!("{prefix}{line}");
+                    }
+                    break; // Standard mode prints the line once and stops
                 }
+
+                if is_anchored { break; }
+
+                let advance_by = if matched_slice.is_empty() { 1 } else { matched_slice.len() };
+                if advance_by > current_search_text.len() { break; }
+                current_search_text = &current_search_text[advance_by..];
             } else {
                 // No match at current index. Slide the window 1 character to try matching at index 1, 2, etc.
                 if is_anchored { break; }
 
                 let mut chars = current_search_text.chars();
-                if chars.next().is_none() { break; }
-                current_search_text = chars.as_str();
+                if let Some(_) = chars.next() {
+                    current_search_text = chars.as_str();
+                } else {
+                    break;
+                }
             }
         }
     }
