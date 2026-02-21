@@ -72,3 +72,7 @@ This project was built as part of the CodeCrafters challenge, which focuses on i
 The goal was to understand how regex engines work internally, including parsing, AST construction, and backtracking match algorithms, without relying on external regex libraries.
 
 https://codecrafters.io
+
+## License
+
+MIT License — see LICENSE file for details.
