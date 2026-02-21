@@ -1,10 +1,10 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupType {
     Positive, // [abc]
     Negative, // [^abc]
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     Literal(char),
     Digit,
