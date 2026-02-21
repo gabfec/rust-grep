@@ -150,3 +150,112 @@ pub fn match_pattern<'a>(input_line: &'a str, tokens: &[Token]) -> Option<&'a st
     let mut captures: Vec<Option<String>> = Vec::new();
     match_here(tokens, input_line, &mut captures).map(|len| &input_line[..len])
 }
+
+
+#[cfg(test)]
+mod tests {
+    use crate::regex::{match_pattern, parse_regex};
+
+    fn m(pattern: &str, text: &str) -> Option<String> {
+        let tokens = parse_regex(pattern);
+        match_pattern(text, &tokens).map(|s| s.to_string())
+    }
+
+    #[test]
+    fn matches_simple_prefix() {
+        assert_eq!(m("abc", "abcdef"), Some("abc".into()));
+        assert_eq!(m("abc", "ab"), None);
+    }
+
+    #[test]
+    fn matches_wildcard() {
+        assert_eq!(m("a.c", "abc"), Some("abc".into()));
+        assert_eq!(m("a.c", "axc"), Some("axc".into()));
+        assert_eq!(m("a.c", "ac"), None);
+    }
+
+    #[test]
+    fn matches_digit_and_word_class() {
+        assert_eq!(m(r"\d\d", "42xx"), Some("42".into()));
+        assert_eq!(m(r"\d\d", "4axx"), None);
+
+        assert_eq!(m(r"\w\w", "a_"), Some("a_".into()));
+        assert_eq!(m(r"\w\w", "a-"), None);
+    }
+
+    #[test]
+    fn matches_bracket_group_positive_and_negative() {
+        assert_eq!(m("[abc]", "a"), Some("a".into()));
+        assert_eq!(m("[abc]", "z"), None);
+
+        assert_eq!(m("[^abc]", "z"), Some("z".into()));
+        assert_eq!(m("[^abc]", "a"), None);
+    }
+
+    #[test]
+    fn matches_end_anchor() {
+        assert_eq!(m("abc$", "abc"), Some("abc".into()));
+        assert_eq!(m("abc$", "abcd"), None);
+    }
+
+    #[test]
+    fn matches_question_mark() {
+        assert_eq!(m("ab?c", "abc"), Some("abc".into()));
+        assert_eq!(m("ab?c", "ac"), Some("ac".into()));
+        assert_eq!(m("ab?c", "abbc"), None);
+    }
+
+    #[test]
+    fn matches_star() {
+        assert_eq!(m("ab*c", "ac"), Some("ac".into()));
+        assert_eq!(m("ab*c", "abc"), Some("abc".into()));
+        assert_eq!(m("ab*c", "abbbc"), Some("abbbc".into()));
+    }
+
+    #[test]
+    fn matches_plus() {
+        assert_eq!(m("ab+c", "ac"), None);
+        assert_eq!(m("ab+c", "abc"), Some("abc".into()));
+        assert_eq!(m("ab+c", "abbbc"), Some("abbbc".into()));
+    }
+
+    #[test]
+    fn matches_braced_quantifiers() {
+        assert_eq!(m("a{3}", "aaab"), Some("aaa".into()));
+        assert_eq!(m("a{3}", "aab"), None);
+
+        assert_eq!(m("a{2,4}", "aaaaa"), Some("aaaa".into())); // greedy
+        assert_eq!(m("a{2,}", "aaaaa"), Some("aaaaa".into())); // greedy to end
+    }
+
+    #[test]
+    fn matches_group_and_backreference() {
+        assert_eq!(m(r"(ab)\1", "abab"), Some("abab".into()));
+        assert_eq!(m(r"(ab)\1", "abac"), None);
+
+        assert_eq!(m(r"(\w\w)\1", "xyxy"), Some("xyxy".into()));
+        assert_eq!(m(r"(\w\w)\1", "xyxz"), None);
+    }
+
+    #[test]
+    fn matches_alternation_inside_group() {
+        assert_eq!(m("(a|bc)d", "ad"), Some("ad".into()));
+        assert_eq!(m("(a|bc)d", "bcd"), Some("bcd".into()));
+        assert_eq!(m("(a|bc)d", "abcd"), None);
+    }
+
+    #[test]
+    fn greedy_then_backtracks_when_needed() {
+        // This checks your quantifier backtracking behavior.
+        // a* should not “eat” the 'b' needed to match the rest.
+        assert_eq!(m("a*ab", "aaab"), Some("aaab".into()));
+    }
+
+    #[test]
+    fn group_quantifier_matches_whole_group() {
+        // Ensure quantifier applies to Group (since parser wraps (...) as Group token)
+        assert_eq!(m("(ab)+", "ababx"), Some("abab".into()));
+        assert_eq!(m("(ab)+", "abx"), Some("ab".into()));
+        assert_eq!(m("(ab)+", "ax"), None);
+    }
+}
