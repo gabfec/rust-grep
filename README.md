@@ -1,39 +1,64 @@
-[![progress-banner](https://backend.codecrafters.io/progress/grep/d6b1e527-c642-4cea-94b5-57f695f6e154)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# Rust Grep Clone with Custom Regex Engine
 
-This is a starting point for Rust solutions to the
-["Build Your Own grep" Challenge](https://app.codecrafters.io/courses/grep/overview).
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![Tests](https://github.com/gabfec/rust-shell/actions/workflows/rust.yml/badge.svg)](https://github.com/gabfec/rust-shell/actions)
 
-[Regular expressions](https://en.wikipedia.org/wiki/Regular_expression)
-(Regexes, for short) are patterns used to match character combinations in
-strings. [`grep`](https://en.wikipedia.org/wiki/Grep) is a CLI tool for
-searching using Regexes.
+A `grep`-like CLI tool written in Rust, featuring a **custom-built regex engine** implemented from scratch.
 
-In this challenge you'll build your own implementation of `grep`. Along the way
-we'll learn about Regex syntax, how parsers/lexers work, and how regular
-expressions are evaluated.
+This project does NOT use Rust's built-in `regex` crate. Instead, it implements:
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+- Regex parser
+- AST representation
+- Backtracking matcher
+- Capture groups and backreferences
+- Quantifiers (`*`, `+`, `?`, `{n}`, `{n,m}`, `{n,}`)
+- Alternation (`|`)
+- Character classes (`[abc]`, `[^abc]`)
+- Anchors (`^`, `$`)
+- CLI compatible with basic `grep` usage
 
-# Passing the first stage
+---
 
-The entry point for your `grep` implementation is in `src/main.rs`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+## Features
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
-```
+### Regex engine
 
-Time to move on to the next stage!
+Supported syntax:
 
-# Stage 2 & beyond
+| Feature | Example |
+|--------|--------|
+Literal | `abc`
+Wildcard | `.`
+Digit class | `\d`
+Word class | `\w`
+Character class | `[abc]`
+Negative class | `[^abc]`
+Quantifiers | `a*`, `a+`, `a?`, `a{3}`, `a{2,5}`
+Grouping | `(abc)`
+Alternation | `(a|b)`
+Backreference | `(ab)\1`
+End anchor | `$`
+Start anchor | `^`
 
-Note: This section is for stages 2 and beyond.
+---
 
-1. Ensure you have `cargo (1.91)` installed locally
-1. Run `./your_program.sh` to run your program, which is implemented in
-   `src/main.rs`. This command compiles your Rust project, so it might be slow
-   the first time you run it. Subsequent runs will be fast.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+### CLI options
+
+| Option | Description |
+|------|-------------|
+`-E pattern` | regex pattern (required)
+`-o` | print only matches
+`-r` | recursive search
+`--color=always` | force color
+`--color=never` | disable color
+`--color=auto` | color if terminal
+
+---
+
+## Example usage
+
+Search stdin:
+
+```bash
+echo "hello123" | cargo run -- -E "\d+"
+
