@@ -1,7 +1,9 @@
 # Rust Grep Clone with Custom Regex Engine
 
+[![Tests](https://github.com/gabfec/rust-grep/actions/workflows/rust.yml/badge.svg)](https://github.com/gabfec/rust-grep/actions)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)]()
+[![Made with Rust](https://img.shields.io/badge/Made%20with-Rust-red.svg)]()
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://github.com/gabfec/rust-shell/actions/workflows/rust.yml/badge.svg)](https://github.com/gabfec/rust-shell/actions)
 
 A `grep`-like CLI tool written in Rust, featuring a **custom-built regex engine** implemented from scratch.
 
@@ -61,4 +63,12 @@ Search stdin:
 
 ```bash
 echo "hello123" | cargo run -- -E "\d+"
+```
 
+## Educational Purpose
+
+This project was built as part of the CodeCrafters challenge, which focuses on implementing real-world systems from scratch.
+
+The goal was to understand how regex engines work internally, including parsing, AST construction, and backtracking match algorithms, without relying on external regex libraries.
+
+https://codecrafters.io
